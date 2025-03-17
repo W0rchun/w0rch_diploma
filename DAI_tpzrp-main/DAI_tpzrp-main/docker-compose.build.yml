@@ -1,0 +1,243 @@
+version: '3.9'
+
+services:
+  rabbitmq:
+    image: rabbitmq:3.10.7-management
+    container_name: rabbitmq
+    environment:
+      RABBITMQ_DEFAULT_USER: user
+      RABBITMQ_DEFAULT_PASS: password
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    networks:
+      - app_network
+
+  nginx:
+    image: nginx:latest
+    container_name: nginx
+    depends_on:
+      - organizations_service
+      - catalog_service
+      - patient_service
+      - appointments_service
+      - org_management_service
+      - auth
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./nginx/conf.d:/etc/nginx/conf.d
+    networks:
+      - app_network
+
+  database:
+    image: postgres:17.2
+    container_name: database
+    environment:
+      POSTGRES_USER: postgres_user
+      POSTGRES_PASSWORD: POSTGRES_PASSWORD
+      PGDATA: /var/lib/postgresql/data/pgdata
+    volumes:
+        - ./docker/init:/docker-entrypoint-initdb.d
+        - ./pgdata:/var/lib/postgresql/data/pgdata
+    networks:
+      - app_network
+
+  organizations_service:
+    build:
+      context: ./organizations_service
+      dockerfile: Dockerfile
+    container_name: organizations_service
+    environment:
+      JWT_SECRET: 'cb3f134ef20717da94f34fd0f22b0c23192e5dbf38b6238be1df669c14b9ea6bbfed2a810c60b54437bba94190c182cf703f8c7e7ad8c2c6e2323bbf0a48f73f25a061319aa0690ee9240ddbf977e72af039e0dbf4c2a0421db145172091d3254945957507cccdc36fcff160296612eb05c2d3592e0e6ab5ab158a033c3099a5'
+      DATABASE_ORG_URL: 'postgresql://root:pass@database:5432/db_organizations'
+      DATABASE_AUTH_URL: 'postgresql://root:pass@database:5432/auth_db'
+      RABBITMQ_URL: 'rabbitmq'
+      RABBITMQ_USER: 'user'
+      RABBITMQ_PASSWORD: 'password'
+      RABBITMQ_PORT: '5672'
+    depends_on:
+      - rabbitmq
+      - database
+    ports:
+      - "5000:5000"
+    restart: on-failure:1
+    networks:
+      - app_network
+    command: ["/wait-for-it.sh", "database:5432", "--", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "5000", "--reload"]
+
+  catalog_service:
+    build:
+      context: ./catalog_service
+      dockerfile: Dockerfile
+    container_name: catalog_service
+    environment:
+      DATABASE_CATALOG_URL: 'postgresql://root:pass@database:5432/db_catalog'
+    depends_on:
+      - organizations_service
+      - database
+      - rabbitmq
+    ports:
+      - "5004:5004"
+    restart: on-failure:1
+    networks:
+      - app_network
+    command: ["/wait-for-it.sh", "database:5432", "--", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "5004", "--reload"]
+
+  catalog_service_connector:
+    build:
+      context: ./catalog_service/connection
+      dockerfile: Dockerfile
+    container_name: catalog_service_connector
+    environment:
+      RABBITMQ_URL: 'rabbitmq'
+      RABBITMQ_USER: 'user'
+      RABBITMQ_PASSWORD: 'password'
+      RABBITMQ_PORT: '5672'
+    depends_on:
+      - catalog_service
+      - database
+      - rabbitmq
+    ports:
+      - "10001:10001"
+    restart: always
+    networks:
+      - app_network
+    command: ["python3", "connection.py", "--reload"]
+
+  patient_service:
+    build:
+      context: ./patient_service
+      dockerfile: Dockerfile
+    container_name: patient_service
+    environment:
+      JWT_SECRET: 'cb3f134ef20717da94f34fd0f22b0c23192e5dbf38b6238be1df669c14b9ea6bbfed2a810c60b54437bba94190c182cf703f8c7e7ad8c2c6e2323bbf0a48f73f25a061319aa0690ee9240ddbf977e72af039e0dbf4c2a0421db145172091d3254945957507cccdc36fcff160296612eb05c2d3592e0e6ab5ab158a033c3099a5'
+      DATABASE_AUTH_URL: 'postgresql://root:pass@database:5432/auth_db'
+      DATABASE_PATIENT_URL: 'postgresql://root:pass@database:5432/db_patient_service'
+      RABBITMQ_URL: 'rabbitmq'
+      RABBITMQ_USER: 'user'
+      RABBITMQ_PASSWORD: 'password'
+      RABBITMQ_PORT: '5672'
+    depends_on:
+      - catalog_service
+      - database
+      - rabbitmq
+    ports:
+      - "5005:5005"
+    restart: on-failure:1
+    networks:
+      - app_network
+    command: ["/wait-for-it.sh", "database:5432", "--", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "5005", "--reload"] 
+
+  patient_service_connector:
+    build:
+      context: ./patient_service/connection
+      dockerfile: Dockerfile
+    container_name: patient_service_connector
+    environment:
+      RABBITMQ_URL: 'rabbitmq'
+      RABBITMQ_USER: 'user'
+      RABBITMQ_PASSWORD: 'password'
+      RABBITMQ_PORT: '5672'
+    depends_on:
+      - catalog_service
+      - database
+      - rabbitmq
+    ports:
+      - "10000:10000"
+    restart: always
+    networks:
+      - app_network
+    command: ["python3", "connection.py", "--reload"]
+
+  appointments_service:
+    build:
+      context: ./appointments_service
+      dockerfile: Dockerfile
+    container_name: appointments_service
+    environment:
+      JWT_SECRET: 'cb3f134ef20717da94f34fd0f22b0c23192e5dbf38b6238be1df669c14b9ea6bbfed2a810c60b54437bba94190c182cf703f8c7e7ad8c2c6e2323bbf0a48f73f25a061319aa0690ee9240ddbf977e72af039e0dbf4c2a0421db145172091d3254945957507cccdc36fcff160296612eb05c2d3592e0e6ab5ab158a033c3099a5'
+      DATABASE_AUTH_URL: 'postgresql://root:pass@database:5432/auth_db'
+      DATABASE_APPOINT_URL: 'postgresql://root:pass@database:5432/db_appointments'
+      RABBITMQ_URL: 'rabbitmq'
+      RABBITMQ_USER: 'user'
+      RABBITMQ_PASSWORD: 'password'
+      RABBITMQ_PORT: '5672'
+    depends_on:
+      - patient_service
+      - database
+    ports:
+      - "5003:5003"
+    restart: on-failure:1
+    networks:
+      - app_network
+    command: ["/wait-for-it.sh", "database:5432", "--", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "5003", "--reload"]
+
+  appointments_service_connector:
+    build:
+      context: ./appointments_service/connection
+      dockerfile: Dockerfile
+    container_name: appointments_service_connector
+    environment:
+      RABBITMQ_URL: 'rabbitmq'
+      RABBITMQ_USER: 'user'
+      RABBITMQ_PASSWORD: 'password'
+      RABBITMQ_PORT: '5672'
+    depends_on:
+      - appointments_service
+      - database
+      - rabbitmq
+    ports:
+      - "10002:10002"
+    restart: always
+    networks:
+      - app_network
+    #command: ["/wait-for-it.sh", "rabbitmq:5672", "--", "python3", "connection.py", "--reload"]
+    command: ["python3", "connection.py", "--reload"]
+    
+  org_management_service:
+    build:
+      context: ./org_management_service
+      dockerfile: Dockerfile
+    container_name: org_management_service
+    environment:
+      JWT_SECRET: 'cb3f134ef20717da94f34fd0f22b0c23192e5dbf38b6238be1df669c14b9ea6bbfed2a810c60b54437bba94190c182cf703f8c7e7ad8c2c6e2323bbf0a48f73f25a061319aa0690ee9240ddbf977e72af039e0dbf4c2a0421db145172091d3254945957507cccdc36fcff160296612eb05c2d3592e0e6ab5ab158a033c3099a5'
+      DATABASE_AUTH_URL: 'postgresql://root:pass@database:5432/auth_db'
+      DATABASE_ORG_MANAGE_URL: 'postgresql://root:pass@database:5432/db_org_management'
+      RABBITMQ_URL: 'rabbitmq'
+      RABBITMQ_USER: 'user'
+      RABBITMQ_PASSWORD: 'password'
+      RABBITMQ_PORT: '5672'
+    depends_on:
+      - appointments_service
+      - database
+    ports:
+      - "5001:5001"
+    restart: on-failure:1
+    networks:
+      - app_network
+    command: ["/wait-for-it.sh", "database:5432", "--", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "5001", "--reload"] 
+
+  auth:
+    build:
+      context: ./auth
+      dockerfile: Dockerfile
+    container_name: auth
+    environment:
+      JWT_SECRET: 'cb3f134ef20717da94f34fd0f22b0c23192e5dbf38b6238be1df669c14b9ea6bbfed2a810c60b54437bba94190c182cf703f8c7e7ad8c2c6e2323bbf0a48f73f25a061319aa0690ee9240ddbf977e72af039e0dbf4c2a0421db145172091d3254945957507cccdc36fcff160296612eb05c2d3592e0e6ab5ab158a033c3099a5'
+      DATABASE_AUTH_URL: 'postgresql://root:pass@database:5432/auth_db'
+    depends_on:
+      - org_management_service
+      - database
+    ports:
+      - "5002:5002"
+    restart: on-failure:1
+    networks:
+      - app_network
+    command: ["/wait-for-it.sh", "database:5432", "--", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "5002", "--reload"] 
+
+
+networks:
+  app_network:
+    driver: bridge
+

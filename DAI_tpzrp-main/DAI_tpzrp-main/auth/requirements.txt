@@ -1,0 +1,16 @@
+﻿bcrypt
+cryptography
+email-validator
+databases==0.9.0
+fastapi
+passlib
+psycopg2-binary
+pydantic
+pydantic_core
+PyJWT
+SQLAlchemy
+python-dotenv
+uvicorn
+python-multipart
+pika
+requests
