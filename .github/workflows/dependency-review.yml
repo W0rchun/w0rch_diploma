@@ -28,5 +28,7 @@ jobs:
     steps:
       - name: 'Checkout repository'
         uses: actions/checkout@v4
+      - name: 'down'
+        run: sudo apt-get install git-extras
       - name: 'count'
-        run: git log --numstat
+        run: git summary --line
